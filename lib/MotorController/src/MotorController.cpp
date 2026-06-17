@@ -1,4 +1,5 @@
 #include "MotorController.h"
+#include "SystemConfig.h" // Includes MOTOR_DUTY_LIMIT definition
 
 MotorController::MotorController(uint8_t pinIn1, uint8_t pinIn2, uint8_t ledcChan1, uint8_t ledcChan2)
     : _pinIn1(pinIn1), _pinIn2(pinIn2), _chan1(ledcChan1), _chan2(ledcChan2) {}
@@ -22,12 +23,15 @@ void MotorController::setSpeed(float speed) {
     // Constrain input velocity values to protect motor windings from saturated spikes
     speed = constrain(speed, -1.0f, 1.0f);
 
+    // Calculate maximum allowed duty register value to clamp terminal voltage at 3.5V RMS
+    uint32_t maxAllowedDuty = (uint32_t)((float)MAX_DUTY * MOTOR_DUTY_LIMIT);
+
     if (speed > 0.01f) {
-        uint32_t duty = (uint32_t)(speed * (float)MAX_DUTY);
+        uint32_t duty = (uint32_t)(speed * (float)maxAllowedDuty);
         ledcWrite(_chan1, duty);
         ledcWrite(_chan2, 0);
     } else if (speed < -0.01f) {
-        uint32_t duty = (uint32_t)(-speed * (float)MAX_DUTY);
+        uint32_t duty = (uint32_t)(-speed * (float)maxAllowedDuty);
         ledcWrite(_chan1, 0);
         ledcWrite(_chan2, duty);
     } else {

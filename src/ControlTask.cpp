@@ -17,10 +17,10 @@ void controlTaskLoop(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     
     while (true) {
-        // Read IMU raw values safely utilizing internal BMI160 callback locks
+        // Read IMU raw values safely
         imu.readSensorData();
         
-        // Read Encoders utilizing static I2C1 bus mutexes
+        // Read Encoders utilizing I2C1 bus mutexes
         float angleL = encoderLeft.getAngleRadians();
         float angleR = encoderRight.getAngleRadians();
         
@@ -35,10 +35,21 @@ void controlTaskLoop(void *pvParameters) {
             g_robotState.velocityR = angleR;
         }
 
-        // Test Sweep Routine: Safe low-excitation sinusoidal output for diagnostic first run
-        float testSpeed = 0.25f * sin(esp_timer_get_time() / 1000000.0f);
-        motorLeft.setSpeed(testSpeed);
-        motorRight.setSpeed(-testSpeed);
+        // State machine logic for the 3.5V step velocity diagnostic routine
+        uint32_t currentTimeMs = millis();
+        uint32_t cycleTime = (currentTimeMs / 3000) % 3; // 3-second intervals
+        
+        float targetTestSpeed = 0.0f;
+        if (cycleTime == 0) {
+            targetTestSpeed = 0.8f;  // Move forward at 80% of configured 3.5V ceiling (2.8V)
+        } else if (cycleTime == 1) {
+            targetTestSpeed = 0.0f;  // Rest / Standstill
+        } else if (cycleTime == 2) {
+            targetTestSpeed = -0.8f; // Move backward at 80% of configured 3.5V ceiling (-2.8V)
+        }
+
+        motorLeft.setSpeed(targetTestSpeed);
+        motorRight.setSpeed(targetTestSpeed); // Same sign for uniform axial motion test
 
         // Strict periodic delay enforcement to maintain control-loop determinism
         vTaskDelayUntil(&xLastWakeTime, CONTROL_LOOP_PERIOD_MS);
@@ -51,7 +62,7 @@ void startControlTask() {
         "ControlTask",
         4096,
         nullptr,
-        3,     // High priority level for real-time control calculations
+        3,     // High priority level
         nullptr,
         1      // Pinned strictly to Core 1
     );
