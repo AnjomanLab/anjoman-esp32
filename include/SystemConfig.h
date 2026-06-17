@@ -8,8 +8,8 @@
 // =============================================================================
 
 // --- Power and Voltage Protection Limits ---
-const float BATTERY_VOLTAGE_MAX    = 8.4f;   
-const float MOTOR_MAX_VOLTAGE      = 3.5f;   
+const float BATTERY_VOLTAGE_MAX    = 7.4f;   
+const float MOTOR_MAX_VOLTAGE      = 5.0f;   
 const float MOTOR_DUTY_LIMIT       = MOTOR_MAX_VOLTAGE / BATTERY_VOLTAGE_MAX; 
 
 // --- Robot Kinematics Configurations ---

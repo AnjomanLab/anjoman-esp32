@@ -19,7 +19,7 @@ private:
     uint8_t _chan2;
     float _dutyLimit; // Caches the electrical limit applied to the PWM output
     
-    const uint32_t PWM_FREQ = 20000; 
+    const uint32_t PWM_FREQ = 5000; 
     const uint8_t PWM_RES_BITS = 10; 
     const uint32_t MAX_DUTY = 1023;
 };
