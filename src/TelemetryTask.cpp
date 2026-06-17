@@ -1,4 +1,5 @@
 #include "TelemetryTask.h"
+#include "PinMap.h"        // Fixed: Included PinMap to resolve SPI and SD pin definitions
 #include "SystemConfig.h"
 #include "SharedState.h"
 #include <WiFi.h>
@@ -42,10 +43,10 @@ void initializeSD() {
 }
 
 void telemetryTaskLoop(void *pvParameters) {
-    // 1. Initialise SD Card Logger
+    // 1. Initialize SD Card Logger
     initializeSD();
 
-    // 2. Initialise ToF Sensor (Using 400kHz Fast I2C0 Bus as requested)
+    // 2. Initialize ToF Sensor (Using 400kHz Fast I2C0 Bus as configured in main.cpp)
     systemLog("[TOF] Uploading firmware blob over I2C0... Please wait (can take up to 10 seconds)\n");
     if (vl53.begin()) { // Default maps to Wire (I2C0)
         vl53.setResolution(VL53L7CX_RESOLUTION_4X4); // Efficient 4x4 matrix representation
@@ -77,9 +78,9 @@ void telemetryTaskLoop(void *pvParameters) {
     const TickType_t x1HzPeriod = pdMS_TO_TICKS(1000); // 1Hz telemetry frequency [1]
 
     while (true) {
-        // Read ToF data asynchronously if ready
+        // Read ToF data asynchronously if ready (Fixed: Used Adafruit native API calls)
         int16_t currentDistances[16] = {0};
-        if (vl53.isRanging() && vl53.checkForData()) {
+        if (vl53.isDataReady()) {
             VL53L7CX_ResultsData results;
             if (vl53.getRangingData(&results)) {
                 for (int i = 0; i < 16; i++) {
@@ -131,7 +132,7 @@ void telemetryTaskLoop(void *pvParameters) {
                                 localStateCopy.tofDistances[6]);
         }
 
-        // Write telemetry to CSV on Micro SD Card
+        // Write telemetry data to CSV format on Micro SD Card
         logFile = SD.open(logFileName, FILE_APPEND);
         if (logFile) {
             logFile.printf("%u,%.3f,%.3f,%.3f", millis(), localStateCopy.velocityL, localStateCopy.velocityR, localStateCopy.velocitySweep);
