@@ -9,8 +9,12 @@
 // Access global hardware driver instances declared in main.cpp
 extern MotorController motorLeft;
 extern MotorController motorRight;
+extern MotorController motorSweep;
+
 extern MagneticEncoder encoderLeft;
 extern MagneticEncoder encoderRight;
+extern MagneticEncoder encoderSweep;
+
 extern BMI160_Custom imu;
 
 void controlTaskLoop(void *pvParameters) {
@@ -23,6 +27,7 @@ void controlTaskLoop(void *pvParameters) {
         // Read Encoders utilizing I2C1 bus mutexes
         float angleL = encoderLeft.getAngleRadians();
         float angleR = encoderRight.getAngleRadians();
+        float angleSweep = encoderSweep.getAngleRadians();
         
         // Critical Section: Safely update shared global state
         {
@@ -33,23 +38,25 @@ void controlTaskLoop(void *pvParameters) {
             g_robotState.imuGyroZ = imu.getGyroZ();
             g_robotState.velocityL = angleL; 
             g_robotState.velocityR = angleR;
+            g_robotState.velocitySweep = angleSweep; // Feed ToF sweep encoder to telemetry
         }
 
-        // State machine logic for the 3.5V step velocity diagnostic routine
+        // Diagnostic Step Motion: 3 seconds forward, 3 seconds idle, 3 seconds reverse
         uint32_t currentTimeMs = millis();
-        uint32_t cycleTime = (currentTimeMs / 3000) % 3; // 3-second intervals
+        uint32_t cycleTime = (currentTimeMs / 3000) % 3; 
         
         float targetTestSpeed = 0.0f;
         if (cycleTime == 0) {
-            targetTestSpeed = 0.8f;  // Move forward at 80% of configured 3.5V ceiling (2.8V)
+            targetTestSpeed = 1.0f;  // Run at 100% of allowed 3.5V ceiling (highest safe torque)
         } else if (cycleTime == 1) {
-            targetTestSpeed = 0.0f;  // Rest / Standstill
+            targetTestSpeed = 0.0f;  
         } else if (cycleTime == 2) {
-            targetTestSpeed = -0.8f; // Move backward at 80% of configured 3.5V ceiling (-2.8V)
+            targetTestSpeed = -1.0f; 
         }
 
         motorLeft.setSpeed(targetTestSpeed);
-        motorRight.setSpeed(targetTestSpeed); // Same sign for uniform axial motion test
+        motorRight.setSpeed(targetTestSpeed);
+        motorSweep.setSpeed(targetTestSpeed); // Drive Sweep motor programmatically
 
         // Strict periodic delay enforcement to maintain control-loop determinism
         vTaskDelayUntil(&xLastWakeTime, CONTROL_LOOP_PERIOD_MS);
@@ -62,8 +69,8 @@ void startControlTask() {
         "ControlTask",
         4096,
         nullptr,
-        3,     // High priority level
+        3,     
         nullptr,
-        1      // Pinned strictly to Core 1
+        1      
     );
 }

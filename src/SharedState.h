@@ -10,10 +10,14 @@ struct RobotState {
     float theta;
     float velocityL;
     float velocityR;
+    float velocitySweep; // Sweep Motor AS5600 Encoder angle representation
     float imuAccX;
     float imuAccY;
     float imuAccZ;
     float imuGyroZ;
+    
+    // Multi-zone Time of Flight matrix representations (4x4 zone layout)
+    int16_t tofDistances[16]; 
 };
 
 // Global shared variables accessed by Core 0 and Core 1
