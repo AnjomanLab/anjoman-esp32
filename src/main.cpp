@@ -9,9 +9,10 @@
 #include "ControlTask.h"
 #include "TelemetryTask.h"
 
-// Instantiate physical hardware driver objects globally
-MotorController motorLeft(PIN_MOTOR_L_IN1, PIN_MOTOR_L_IN2, 0, 1);
-MotorController motorRight(PIN_MOTOR_R_IN1, PIN_MOTOR_R_IN2, 2, 3);
+// Instantiate physical hardware driver objects globally with OOP decoupling
+// Pass the MOTOR_DUTY_LIMIT directly to the constructors to solve compiling issues
+MotorController motorLeft(PIN_MOTOR_L_IN1, PIN_MOTOR_L_IN2, 0, 1, MOTOR_DUTY_LIMIT);
+MotorController motorRight(PIN_MOTOR_R_IN1, PIN_MOTOR_R_IN2, 2, 3, MOTOR_DUTY_LIMIT);
 
 MagneticEncoder encoderLeft(Wire1, MUX_I2C_ADDR, MUX_CHAN_LEFT_ENCODER);
 MagneticEncoder encoderRight(Wire1, MUX_I2C_ADDR, MUX_CHAN_RIGHT_ENCODER);
@@ -30,9 +31,7 @@ void systemLog(const char* format, ...) {
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
 
-    // Write to Native USB CDC (Serial)
     Serial.print(buffer);
-    // Write to Hardware UART (Serial0 - CP2102 TXD0/RXD0)
     Serial0.print(buffer);
 }
 
@@ -49,11 +48,11 @@ void setup() {
     digitalWrite(PIN_MOTOR_R_IN1, LOW);
     digitalWrite(PIN_MOTOR_R_IN2, LOW);
 
-    // Initialize both interfaces to ensure monitoring is always active
+    // Initialize serial ports
     Serial.begin(115200);   // Native USB CDC
     Serial0.begin(115200);  // CP2102 Hardware UART0
     
-    delay(2000); // Guard time to stabilize USB connections
+    delay(2000); 
     systemLog("\n[SYSTEM] Initialize Anjoman ESP32 Swarm Robot...\n");
 
     // Initialize I2C0 Bus (ToF Dedicated Bus at 100kHz)
@@ -81,23 +80,22 @@ void setup() {
         systemLog("[WARNING] Failed to detect Encoders on Multiplexer I2C1. Check physical pull-ups.\n");
     }
 
-    // Initialize Bosch BMI160 IMU
-    systemLog("[SYSTEM] Attempting communication with BMI160 IMU...\n");
+    // Initialize Bosch BMI160 IMU (Now isolated behind Mux Channel 3)
+    systemLog("[SYSTEM] Attempting communication with BMI160 IMU behind Channel 3...\n");
     if (imu.begin()) {
         imu.configureDefault();
-        systemLog("[SYSTEM] Bosch BMI160 IMU detected and configured.\n");
+        systemLog("[SYSTEM] Bosch BMI160 IMU detected and configured via Multiplexer.\n");
     } else {
         systemLog("[WARNING] Failed to communicate with BMI160 IMU. Bus timeout bypassed.\n");
     }
 
     // Create FreeRTOS Tasks and pin them to their target cores
-    startTelemetryTask(); // Spawns on Core 0
-    startControlTask();   // Spawns on Core 1
+    startTelemetryTask(); // Spawns on Core 0 (WiFi + TCP + Terminal logs)
+    startControlTask();   // Spawns on Core 1 (Physical motor logic at 100Hz)
 
     systemLog("[SYSTEM] Setup completed. FreeRTOS Scheduler running.\n");
 }
 
 void loop() {
-    // Keep main thread suspended to save resources. Real-time tasks handle processing.
     vTaskDelay(pdMS_TO_TICKS(1000));
 }

@@ -37,6 +37,13 @@ int8_t BMI160_Custom::i2c_read_cb(uint8_t dev_id, uint8_t reg_addr, uint8_t *dat
     // RAII Lock: strictly scoped lock that automatically releases at any return point
     IMULock lock;
 
+    // Direct TCA9548A Multiplexer switch to Channel 3 (IMU) [SD3/SC3]
+    _instance->_wire.beginTransmission(0x70);
+    _instance->_wire.write(1 << 3); // Write bitmask for Channel 3 (0x08)
+    if (_instance->_wire.endTransmission() != 0) {
+        return -1; 
+    }
+
     _instance->_wire.beginTransmission(dev_id);
     _instance->_wire.write(reg_addr);
     if (_instance->_wire.endTransmission() != 0) {
@@ -59,6 +66,13 @@ int8_t BMI160_Custom::i2c_write_cb(uint8_t dev_id, uint8_t reg_addr, uint8_t *da
 
     // RAII Lock
     IMULock lock;
+
+    // Direct TCA9548A Multiplexer switch to Channel 3 (IMU) [SD3/SC3]
+    _instance->_wire.beginTransmission(0x70);
+    _instance->_wire.write(1 << 3); 
+    if (_instance->_wire.endTransmission() != 0) {
+        return -1; 
+    }
 
     _instance->_wire.beginTransmission(dev_id);
     _instance->_wire.write(reg_addr);
