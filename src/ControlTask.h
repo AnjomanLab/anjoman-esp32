@@ -3,7 +3,6 @@
 
 #include <Arduino.h>
 
-// Starts the real-time control task on Core 1
 void startControlTask();
 
 #endif // CONTROL_TASK_H
