@@ -4,8 +4,14 @@
 #include "SharedState.h"
 #include <WiFi.h>
 #include <WebServer.h>
+#include <SPI.h>
+#include <SD.h>
+#include <Adafruit_VL53L7CX.h>
 
 extern void systemLog(const char* format, ...);
+
+// Properly instantiated global object
+Adafruit_VL53L7CX vl53; 
 
 IPAddress local_IP(192, 168, 1, 150);
 IPAddress gateway(192, 168, 1, 1);
@@ -13,27 +19,66 @@ IPAddress subnet(255, 255, 255, 0);
 
 WebServer server(80);
 
-// Barebone plain text HTML UI - Zero styling, ultra lightweight under 1KB
+File logFile;
+char logFileName[32];
+bool sdCardMounted = false;
+
+// Barebone plain text HTML console with dynamic status monitors & absolute parameter Wiki guide
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <body>
-    <h3>ANJOMAN SYSTEM BRINGUP</h3>
-    <pre id="mon">LOAD...</pre>
+    <h3>ANJOMAN SYSTEM DIAGNOSTIC PANEL</h3>
+    <pre id="mon">RETRIEVING STATUS DATAPACKETS...</pre>
     <hr>
-    <h4>MOTOR REGISTERS</h4>
-    L: Freq <input type="number" id="fl" value="5000"> Res <input type="number" id="rl" value="10"><br>
-    R: Freq <input type="number" id="fr" value="5000"> Res <input type="number" id="rr" value="10"><br>
-    S: Freq <input type="number" id="fs" value="5000"> Res <input type="number" id="rs" value="10"><br>
-    <button onclick="setReg()">Apply Registers</button>
+    <h4>ACTUATOR REGISTERS CONFIGURATION</h4>
+    Left Motor:  Freq <input type="number" id="fl" value="5000"> Hz | Res <input type="number" id="rl" value="10"> bits<br>
+    Right Motor: Freq <input type="number" id="fr" value="5000"> Hz | Res <input type="number" id="rr" value="10"> bits<br>
+    Sweep Motor: Freq <input type="number" id="fs" value="5000"> Hz | Res <input type="number" id="rs" value="10"> bits<br>
+    <button onclick="setReg()">Write Actuator Registers</button>
     <hr>
-    <h4>STEP PULSE</h4>
-    L-Duty (-1.0 to 1.0): <input type="text" id="dl" value="0.0"><br>
-    R-Duty (-1.0 to 1.0): <input type="text" id="dr" value="0.0"><br>
-    S-Duty (-1.0 to 1.0): <input type="text" id="ds" value="0.0"><br>
-    Duration (ms): <input type="number" id="dur" value="1000"><br>
-    <button onclick="pulse()">Fire Step Pulse</button>
-    <button onclick="stop()">STOP BRAKE</button>
+    <h4>STEP RESPONSE TEST PANEL</h4>
+    Left Motor Duty (-1.0 to 1.0):  <input type="text" id="dl" value="0.0"><br>
+    Right Motor Duty (-1.0 to 1.0): <input type="text" id="dr" value="0.0"><br>
+    Sweep Motor Duty (-1.0 to 1.0): <input type="text" id="ds" value="0.0"><br>
+    Pulse Step Duration (ms):       <input type="number" id="dur" value="1000"><br>
+    <button onclick="pulse()">Fire Bounded Step Pulse</button>
+    <button style="background:red; color:white;" onclick="stop()">STOP HARD BRAKE</button>
+    <hr>
+    <h4>SENSING & LOCALIZATION</h4>
+    ToF Ranging Resolution Matrix: 
+    <select id="tof_res">
+        <option value="4">4x4 Matrix (16 Zones)</option>
+        <option value="8" selected>8x8 Matrix (64 Zones)</option>
+    </select>
+    <button onclick="setTofRes()">Apply Matrix Resolution</button>
+    <br><br>
+    Self-Occlusion Logging Mode (Serial Filter): 
+    <input type="checkbox" id="occlusion" onchange="toggleOcclusion(this.checked)"> Active
+    <hr>
+    
+    <h4>WIKI GUIDE & DESCRIPTION OF PARAMETERS</h4>
+    <pre>
+-----------------------------------------------------------------------------------------
+PARAMETER             | TYPE    | BEHAVIOR & PHYSICAL REACTION IN BRINGUP PHASE
+-----------------------------------------------------------------------------------------
+Left/Right Motor Duty | float   | Maps directly to driver voltage. 1.0 is full forward,
+                      |         | -1.0 is full reverse. Used to match wheel directions.
+Sweep Motor Duty      | float   | Regulates ToF rotation. Controls torque and speed.
+Freq (Hz)             | integer | Swaps timer frequency on S3 LEDC registers. Lowering
+                      |         | frequency (e.g., 5000Hz) dramatically increases torque.
+Res (Bits)            | integer | Sets resolution bit width (8, 10, or 12). 10 bits maps
+                      |         | duty cycles from 0 to 1023 steps.
+Pulse Duration (ms)   | integer | Bounded time for motor actuation. Halts and brakes 
+                      |         | immediately when the epoch ends.
+ToF Resolution        | enum    | 4x4 provides 16 distance zones up to 30Hz. 
+                      |         | 8x8 provides high density 64 zones up to 15Hz.
+Self-Occlusion Mode   | boolean | Suspends all telemetry logs in serial except: 
+                      |         | [ToF Sweep Angle] and [ToF Center Distance]. 
+                      |         | Essential to capture the precise coordinate of the nose.
+-----------------------------------------------------------------------------------------
+    </pre>
+
     <script>
         function setReg() {
             fetch('/api/config?fl='+document.getElementById('fl').value+'&rl='+document.getElementById('rl').value+'&fr='+document.getElementById('fr').value+'&rr='+document.getElementById('rr').value+'&fs='+document.getElementById('fs').value+'&rs='+document.getElementById('rs').value);
@@ -42,15 +87,44 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
             fetch('/api/pulse?dl='+document.getElementById('dl').value+'&dr='+document.getElementById('dr').value+'&ds='+document.getElementById('ds').value+'&dur='+document.getElementById('dur').value);
         }
         function stop() { fetch('/api/stop'); }
+        
+        function setTofRes() {
+            fetch('/api/tof?res=' + document.getElementById('tof_res').value);
+        }
+        function toggleOcclusion(val) {
+            fetch('/api/occlusion?val=' + (val ? "1" : "0"));
+        }
+
         setInterval(() => {
             fetch('/api/status').then(r=>r.json()).then(d=>{
-                document.getElementById('mon').innerText = `EncL: ${d.encL.toFixed(3)} rad | EncR: ${d.encR.toFixed(3)} rad | EncS: ${d.encSweep.toFixed(3)} rad\nAcc: ${d.accX.toFixed(2)}, ${d.accY.toFixed(2)}, ${d.accZ.toFixed(2)} G | GyroZ: ${d.gyroZ.toFixed(2)} dps`;
+                document.getElementById('mon').innerText = `EncL: ${d.encL.toFixed(3)} rad | EncR: ${d.encR.toFixed(3)} rad | EncS: ${d.encSweep.toFixed(3)} rad\nAcc: ${d.accX.toFixed(2)}, ${d.accY.toFixed(2)}, ${d.accZ.toFixed(2)} G | GyroZ: ${d.gyroZ.toFixed(2)} dps\nToF Center Distance: ${d.tofCenter} mm`;
             });
         }, 150);
     </script>
 </body>
 </html>
 )rawliteral";
+
+void initializeSD() {
+    SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_SD_CS);
+    if (!SD.begin(PIN_SD_CS, SPI, 4000000U)) {
+        systemLog("[WARNING] Micro SD Card Mount Failed. Continuing without physical logger.\n");
+        return;
+    }
+    
+    snprintf(logFileName, sizeof(logFileName), "/tof_8x8_%u.csv", millis());
+    logFile = SD.open(logFileName, FILE_WRITE);
+    if (logFile) {
+        logFile.print("Time_ms,Enc_L,Enc_R,Enc_Sweep_Rad,Acc_X,Acc_Y,Gyro_Z");
+        for(int i = 0; i < 64; i++) {
+            logFile.printf(",Z%d", i);
+        }
+        logFile.println();
+        logFile.close();
+        sdCardMounted = true;
+        systemLog("[LOGGER] Micro SD Logging active: %s\n", logFileName);
+    }
+}
 
 void handleRoot() {
     server.send_P(200, "text/html", INDEX_HTML);
@@ -86,24 +160,48 @@ void handleStop() {
     server.send(200, "text/plain", "OK");
 }
 
+void handleToFResolution() {
+    if (server.hasArg("res")) {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        g_tuningParams.targetToFResolution = server.arg("res").toInt();
+        g_tuningParams.triggerResolutionChange = true; 
+    }
+    server.send(200, "text/plain", "OK");
+}
+
+void handleOcclusionToggle() {
+    if (server.hasArg("val")) {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        g_tuningParams.selfOcclusionMode = (server.arg("val") == "1");
+    }
+    server.send(200, "text/plain", "OK");
+}
+
 void handleStatus() {
     RobotState localState;
+    TuningParams localParams;
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         localState = g_robotState;
+        localParams = g_tuningParams;
     }
+    int16_t centerDistance = (localParams.targetToFResolution == 8) ? localState.tofDistances[27] : localState.tofDistances[6];
+
     String json = "{\"encL\":" + String(localState.velocityL, 4) + 
                   ",\"encR\":" + String(localState.velocityR, 4) + 
-                  ",\"encSweep\":" + String(localState.velocitySweep, 4) + 
+                  ",\"encSweep\":" + String(localState.velocitySweep, 3) + 
                   ",\"accX\":" + String(localState.imuAccX, 3) + 
                   ",\"accY\":" + String(localState.imuAccY, 3) + 
                   ",\"accZ\":" + String(localState.imuAccZ, 3) + 
-                  ",\"gyroZ\":" + String(localState.imuGyroZ, 3) + "}";
+                  ",\"gyroZ\":" + String(localState.imuGyroZ, 3) + 
+                  ",\"tofCenter\":" + String(centerDistance) + "}";
     server.send(200, "application/json", json);
 }
 
 void telemetryTaskLoop(void *pvParameters) {
-    WiFi.mode(WIFI_STA); // Force single station mode to save RAM and RF cycles
+    initializeSD();
+
+    WiFi.mode(WIFI_STA); 
     WiFi.disconnect(true);
     delay(100);
     WiFi.config(local_IP, gateway, subnet);
@@ -113,41 +211,121 @@ void telemetryTaskLoop(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     
-    WiFi.setSleep(false); // CRITICAL: Disable WiFi power-save to drop ping times below 5ms! [1]
+    WiFi.setSleep(false); 
     systemLog("[WIFI] Dynamic low-latency mode active. IP: %s\n", WiFi.localIP().toString().c_str());
+
+    // Initialize ToF in default 8x8 mode
+    systemLog("[TOF] Mounting VL53L7CX firmware over I2C0...\n");
+    if (vl53.begin()) {
+        vl53.setResolution(VL53L7CX_RESOLUTION_8X8);
+        vl53.setRangingFrequency(15);
+        vl53.startRanging();
+        systemLog("[TOF] VL53L7CX online.\n");
+    }
 
     server.on("/", handleRoot);
     server.on("/api/config", handleConfigUpdate);
     server.on("/api/pulse", handlePulse);
     server.on("/api/stop", handleStop);
     server.on("/api/status", handleStatus);
+    server.on("/api/tof", handleToFResolution);
+    server.on("/api/occlusion", handleOcclusionToggle);
     server.begin();
 
     uint32_t lastLogTime = millis();
 
     while (true) {
-        // Handle incoming HTTP Client packets (Fixed: added handleClient() loop)
         server.handleClient();
 
-        // Safe 1Hz logging frequency to prevent serial buffer congestion
-        if (millis() - lastLogTime >= 1000) {
-            lastLogTime = millis();
-            RobotState localState;
-            TuningParams localParams;
-            {
-                std::lock_guard<std::mutex> lock(g_stateMutex);
-                localState = g_robotState;
-                localParams = g_tuningParams;
-            }
-            systemLog("[TELE] TS_Us:%u | L:%.2f | R:%.2f | Sweep:%.2f | Acc_Z:%.2f\n",
-                      localParams.commandExecutionTimestampMicros,
-                      localState.velocityL, 
-                      localState.velocityR, 
-                      localState.velocitySweep,
-                      localState.imuAccZ);
+        bool resChangeTriggered = false;
+        uint8_t nextRes = 8;
+        {
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            resChangeTriggered = g_tuningParams.triggerResolutionChange;
+            nextRes = g_tuningParams.targetToFResolution;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5)); // Run loop at 200Hz for responsive web operations
+        if (resChangeTriggered) {
+            systemLog("[TOF] Reconfiguring resolution to %dx%d...\n", nextRes, nextRes);
+            vl53.stopRanging();
+            if (nextRes == 8) {
+                vl53.setResolution(VL53L7CX_RESOLUTION_8X8);
+                vl53.setRangingFrequency(15);
+            } else {
+                vl53.setResolution(VL53L7CX_RESOLUTION_4X4);
+                vl53.setRangingFrequency(30);
+            }
+            vl53.startRanging();
+            {
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                g_tuningParams.triggerResolutionChange = false;
+            }
+            systemLog("[TOF] Resolution reconfigured.\n");
+        }
+
+        int16_t tempDistances[64] = {0};
+        bool isNewFrameCaptured = false;
+        if (vl53.isDataReady()) {
+            VL53L7CX_ResultsData results;
+            if (vl53.getRangingData(&results)) {
+                isNewFrameCaptured = true;
+                for (int i = 0; i < (nextRes * nextRes); i++) {
+                    tempDistances[i] = results.distance_mm[i];
+                }
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            for (int i = 0; i < 64; i++) {
+                g_robotState.tofDistances[i] = tempDistances[i];
+            }
+        }
+
+        RobotState localState;
+        TuningParams localParams;
+        {
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            localState = g_robotState;
+            localParams = g_tuningParams;
+        }
+
+        // Dynamic logger writes in raw cumulative radians [1]
+        if (isNewFrameCaptured && sdCardMounted) {
+            logFile = SD.open(logFileName, FILE_APPEND);
+            if (logFile) {
+                logFile.printf("%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f", 
+                               millis(), localState.velocityL, localState.velocityR, localState.velocitySweep,
+                               localState.imuAccX, localState.imuAccY, localState.imuGyroZ);
+                for (int i = 0; i < (nextRes * nextRes); i++) {
+                    logFile.printf(",%d", localState.tofDistances[i]);
+                }
+                logFile.println();
+                logFile.close();
+                
+                // Logging feedback using raw cumulative radians [1]
+                systemLog("[SD_WRITE] Frame stored. Sweep Angle: %.3f rad\n", localState.velocitySweep);
+            }
+        }
+
+        if (millis() - lastLogTime >= 100) { 
+            lastLogTime = millis();
+            
+            if (!localParams.selfOcclusionMode) {
+                systemLog("[TELE] TS_Us:%u | L:%.2f | R:%.2f | Sweep:%.3f | Acc_Z:%.2f\n",
+                          localParams.commandExecutionTimestampMicros,
+                          localState.velocityL, 
+                          localState.velocityR, 
+                          localState.velocitySweep,
+                          localState.imuAccZ);
+            } else {
+                int16_t centerDistance = (localParams.targetToFResolution == 8) ? localState.tofDistances[27] : localState.tofDistances[6];
+                systemLog("[OCCLUSION_TEST] Angle_Rad: %.3f | Center_Distance: %d mm\n",
+                          localState.velocitySweep, centerDistance);
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5)); 
     }
 }
 

@@ -4,7 +4,6 @@
 #include <mutex>
 #include <Arduino.h>
 
-// Realtime state parameters updated from Core 1
 struct RobotState {
     float velocityL;
     float velocityR;
@@ -13,9 +12,9 @@ struct RobotState {
     float imuAccY;
     float imuAccZ;
     float imuGyroZ;
+    int16_t tofDistances[64]; // Stores raw 4x4 (first 16) or 8x8 matrix output
 };
 
-// Interactive parameters updated from Web Server on Core 0
 struct TuningParams {
     float dutyL;
     float dutyR;
@@ -32,7 +31,12 @@ struct TuningParams {
     uint32_t pulseDurationMs;
     bool executePulse;
     
-    uint32_t commandExecutionTimestampMicros; // Precision timing for telemetry speed math
+    uint32_t commandExecutionTimestampMicros;
+    
+    // Self-Occlusion and Dynamic Sensing configuration registers
+    uint8_t targetToFResolution; // 4 = 4x4 Mode, 8 = 8x8 Mode
+    bool triggerResolutionChange;
+    bool selfOcclusionMode;      // Filters out all serial logs except Sweep Angle and Center ToF
 };
 
 extern RobotState g_robotState;

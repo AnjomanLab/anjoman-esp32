@@ -5,6 +5,7 @@
 #include "MagneticEncoder.h"
 #include "BMI160_Custom.h"
 
+// External references to hardware instances
 extern MotorController motorLeft;
 extern MotorController motorRight;
 extern MotorController motorSweep;
@@ -15,10 +16,13 @@ extern MagneticEncoder encoderSweep;
 
 extern BMI160_Custom imu;
 
+// Declaring the global dual-interface logger
+extern void systemLog(const char* format, ...);
+
 void controlTaskLoop(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     
-    // Dynamic tracking of runtime configuration parameters
+    // Cache to monitor dynamic register changes at runtime
     uint32_t cachedFreqL = 5000, cachedFreqR = 5000, cachedFreqSweep = 5000;
     uint8_t cachedResL = 10, cachedResR = 10, cachedResSweep = 10;
     
@@ -59,30 +63,43 @@ void controlTaskLoop(void *pvParameters) {
             cachedFreqSweep = localParams.freqSweep; cachedResSweep = localParams.resSweep;
         }
 
-        // 2. Pulse Controller Logic (Time-bounded execution)
+        // 2. Pulse Controller Logic with embedded hardware parameter tracking [1]
         if (localParams.executePulse && !isPulsing) {
             isPulsing = true;
             pulseEndMillis = millis() + localParams.pulseDurationMs;
             
-            // Mark microsecond timestamp for precise velocity calculations
+            uint32_t activationTimestampUs = micros();
             {
                 std::lock_guard<std::mutex> lock(g_stateMutex);
-                g_tuningParams.commandExecutionTimestampMicros = micros();
+                g_tuningParams.commandExecutionTimestampMicros = activationTimestampUs;
             }
+
+            // High priority unified system log depicting exact input conditions at startup edge [1]
+            systemLog("[PULSE_START] TS_Us:%u | L_Duty:%.2f | R_Duty:%.2f | S_Duty:%.2f | L_Freq:%u | R_Freq:%u | S_Freq:%u | L_Res:%u | R_Res:%u | S_Res:%u | Dur_Ms:%u\n",
+                      activationTimestampUs,
+                      localParams.dutyL, localParams.dutyR, localParams.dutySweep,
+                      localParams.freqL, localParams.freqR, localParams.freqSweep,
+                      localParams.resL, localParams.resR, localParams.resSweep,
+                      localParams.pulseDurationMs);
 
             motorLeft.setSpeed(localParams.dutyL * MOTOR_L_SIGN);
             motorRight.setSpeed(localParams.dutyR * MOTOR_R_SIGN);
             motorSweep.setSpeed(localParams.dutySweep * MOTOR_SWEEP_SIGN);
         }
 
+        // Pulse boundary termination and active electrical braking
         if (isPulsing && millis() >= pulseEndMillis) {
             motorLeft.brake();
             motorRight.brake();
             motorSweep.brake();
             isPulsing = false;
+            
+            // Mark the exact microsecond timestamp of the voltage termination edge [1]
+            systemLog("[PULSE_END] TS_Us:%u\n", micros());
+            
             {
                 std::lock_guard<std::mutex> lock(g_stateMutex);
-                g_tuningParams.executePulse = false; // Reset trigger state
+                g_tuningParams.executePulse = false; 
             }
         }
 

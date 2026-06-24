@@ -8,9 +8,8 @@
 #include "BMI160_Custom.h"
 #include "ControlTask.h"
 #include "TelemetryTask.h"
+#include <Adafruit_VL53L7CX.h>
 
-// Instantiate physical hardware driver objects globally with OOP decoupling
-// Set dynamic defaults: 5kHz frequency, 10-bit resolution
 MotorController motorLeft(PIN_MOTOR_L_IN1, PIN_MOTOR_L_IN2, 0, 1);
 MotorController motorRight(PIN_MOTOR_R_IN1, PIN_MOTOR_R_IN2, 2, 3);
 MotorController motorSweep(PIN_SWEEP_IN1, PIN_SWEEP_IN2, 4, 5);
@@ -33,7 +32,13 @@ void systemLog(const char* format, ...) {
 }
 
 void setup() {
-    // Force immediate safe state to prevent motor floating on startup
+    // -------------------------------------------------------------------------
+    // CRITICAL FIRST LINE DEFENSE: Wake up ToF Regulator & Kill Motor Floating
+    // -------------------------------------------------------------------------
+    pinMode(PIN_TOF_LPN, OUTPUT);
+    digitalWrite(PIN_TOF_LPN, HIGH); // Pull Wakeup pin HIGH to boot up the ToF [1]
+    delay(150); // Allow LDO voltage rail to stabilize before any I2C write [1]
+
     pinMode(PIN_MOTOR_L_IN1, OUTPUT);
     pinMode(PIN_MOTOR_L_IN2, OUTPUT);
     pinMode(PIN_MOTOR_R_IN1, OUTPUT);
@@ -53,34 +58,39 @@ void setup() {
     
     delay(2000); 
     systemLog("\n==================================================\n");
-    systemLog("[ANJOMAN BRINGUP] System initialized.\n");
+    systemLog("[ANJOMAN BRINGUP] Dynamic Testing Suite Initiated.\n");
     systemLog("==================================================\n");
 
     // Initialize Wire1 at 400kHz Fast-mode
     Wire1.begin(PIN_I2C1_SDA, PIN_I2C1_SCL, 400000U);
     Wire1.setTimeOut(50); 
 
-    // Initial default execution values passed down to HAL
+    // Mount I2C0 dedicated Bus for ToF at 400kHz
+    Wire.begin(PIN_I2C0_SDA, PIN_I2C0_SCL, 400000U);
+    Wire.setTimeOut(50);
+
+    // Actuator Driver default registers allocation (5kHz frequency, 10-bit resolution)
     motorLeft.begin(5000, 10, MOTOR_DUTY_LIMIT);
     motorRight.begin(5000, 10, MOTOR_DUTY_LIMIT);
     motorSweep.begin(5000, 10, MOTOR_DUTY_LIMIT);
 
+    // Encoder initializations
     encoderLeft.begin();
     encoderRight.begin();
     encoderSweep.begin();
 
-    // BMI160 initialization (No offsets applied in this bringup phase)
+    // Inertial Measurement Unit initialization
     if (imu.begin()) {
         imu.configureDefault();
-        systemLog("[SYSTEM] Bosch BMI160 online.\n");
+        systemLog("[SYSTEM] Bosch BMI160 Online.\n");
     } else {
         systemLog("[WARNING] BMI160 Offline. Bypass.\n");
     }
 
-    startTelemetryTask(); // Web server on Core 0
-    startControlTask();   // Dynamic motor/encoder HAL on Core 1
+    startTelemetryTask(); // Port 80 Web Console + ToF Handler (Core 0)
+    startControlTask();   // High frequency Realtime Motor Loop (Core 1)
 
-    systemLog("[SYSTEM] Scheduler initiated. Navigate to http://192.168.1.150\n");
+    systemLog("[SYSTEM] Setup completed successfully. IP: 192.168.1.150\n");
 }
 
 void loop() {

@@ -1,2 +1,8 @@
 .pio
 prompt.md
+*.csv
+*.html
+*.txt
+*.jpg
+*.py
+*.mp4
