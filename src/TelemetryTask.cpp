@@ -9,8 +9,6 @@
 #include <Adafruit_VL53L7CX.h>
 
 extern void systemLog(const char* format, ...);
-
-// Properly instantiated global object
 Adafruit_VL53L7CX vl53; 
 
 IPAddress local_IP(192, 168, 1, 150);
@@ -32,9 +30,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <pre id="mon">RETRIEVING STATUS DATAPACKETS...</pre>
     <hr>
     <h4>ACTUATOR REGISTERS CONFIGURATION</h4>
-    Left Motor:  Freq <input type="number" id="fl" value="5000"> Hz | Res <input type="number" id="rl" value="10"> bits<br>
-    Right Motor: Freq <input type="number" id="fr" value="5000"> Hz | Res <input type="number" id="rr" value="10"> bits<br>
-    Sweep Motor: Freq <input type="number" id="fs" value="5000"> Hz | Res <input type="number" id="rs" value="10"> bits<br>
+    Left Motor:  Freq <input type="number" id="fl" value="2000"> Hz | Res <input type="number" id="rl" value="10"> bits<br>
+    Right Motor: Freq <input type="number" id="fr" value="2000"> Hz | Res <input type="number" id="rr" value="10"> bits<br>
+    Sweep Motor: Freq <input type="number" id="fs" value="7000"> Hz | Res <input type="number" id="rs" value="10"> bits<br>
     <button onclick="setReg()">Write Actuator Registers</button>
     <hr>
     <h4>STEP RESPONSE TEST PANEL</h4>
@@ -44,6 +42,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     Pulse Step Duration (ms):       <input type="number" id="dur" value="1000"><br>
     <button onclick="pulse()">Fire Bounded Step Pulse</button>
     <button style="background:red; color:white;" onclick="stop()">STOP HARD BRAKE</button>
+    <hr>
+    <h4>SYSTEMATIC DIAGNOSTIC SUITE</h4>
+    <button style="background:green; color:black; font-weight:bold; height:35px;" onclick="runSequence()">RUN AUTOMATED SEQUENCE TEST (9000ms)</button>
     <hr>
     <h4>SENSING & LOCALIZATION</h4>
     ToF Ranging Resolution Matrix: 
@@ -66,7 +67,7 @@ Left/Right Motor Duty | float   | Maps directly to driver voltage. 1.0 is full f
                       |         | -1.0 is full reverse. Used to match wheel directions.
 Sweep Motor Duty      | float   | Regulates ToF rotation. Controls torque and speed.
 Freq (Hz)             | integer | Swaps timer frequency on S3 LEDC registers. Lowering
-                      |         | frequency (e.g., 5000Hz) dramatically increases torque.
+                      |         | frequency (e.g., 2000Hz) dramatically increases torque.
 Res (Bits)            | integer | Sets resolution bit width (8, 10, or 12). 10 bits maps
                       |         | duty cycles from 0 to 1023 steps.
 Pulse Duration (ms)   | integer | Bounded time for motor actuation. Halts and brakes 
@@ -88,6 +89,10 @@ Self-Occlusion Mode   | boolean | Suspends all telemetry logs in serial except:
         }
         function stop() { fetch('/api/stop'); }
         
+        function runSequence() {
+            fetch('/api/sequence').then(r => r.text()).then(t => alert(t));
+        }
+
         function setTofRes() {
             fetch('/api/tof?res=' + document.getElementById('tof_res').value);
         }
@@ -160,6 +165,12 @@ void handleStop() {
     server.send(200, "text/plain", "OK");
 }
 
+void handleSequenceRun() {
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    g_tuningParams.executeSequence = true; // Set state machine trigger flag [1]
+    server.send(200, "text/plain", "Automated Profiling Sequence Started.");
+}
+
 void handleToFResolution() {
     if (server.hasArg("res")) {
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -228,6 +239,7 @@ void telemetryTaskLoop(void *pvParameters) {
     server.on("/api/pulse", handlePulse);
     server.on("/api/stop", handleStop);
     server.on("/api/status", handleStatus);
+    server.on("/api/sequence", handleSequenceRun);
     server.on("/api/tof", handleToFResolution);
     server.on("/api/occlusion", handleOcclusionToggle);
     server.begin();
@@ -290,7 +302,7 @@ void telemetryTaskLoop(void *pvParameters) {
             localParams = g_tuningParams;
         }
 
-        // Dynamic logger writes in raw cumulative radians [1]
+        // Write telemetry data in raw cumulative radians [1]
         if (isNewFrameCaptured && sdCardMounted) {
             logFile = SD.open(logFileName, FILE_APPEND);
             if (logFile) {
@@ -303,7 +315,6 @@ void telemetryTaskLoop(void *pvParameters) {
                 logFile.println();
                 logFile.close();
                 
-                // Logging feedback using raw cumulative radians [1]
                 systemLog("[SD_WRITE] Frame stored. Sweep Angle: %.3f rad\n", localState.velocitySweep);
             }
         }

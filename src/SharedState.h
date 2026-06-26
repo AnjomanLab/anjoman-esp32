@@ -12,7 +12,7 @@ struct RobotState {
     float imuAccY;
     float imuAccZ;
     float imuGyroZ;
-    int16_t tofDistances[64]; // Stores raw 4x4 (first 16) or 8x8 matrix output
+    int16_t tofDistances[64]; 
 };
 
 struct TuningParams {
@@ -33,10 +33,12 @@ struct TuningParams {
     
     uint32_t commandExecutionTimestampMicros;
     
-    // Self-Occlusion and Dynamic Sensing configuration registers
-    uint8_t targetToFResolution; // 4 = 4x4 Mode, 8 = 8x8 Mode
+    uint8_t targetToFResolution; 
     bool triggerResolutionChange;
-    bool selfOcclusionMode;      // Filters out all serial logs except Sweep Angle and Center ToF
+    bool selfOcclusionMode;      
+    
+    // Test Sequence Flags
+    bool executeSequence; // Signals ControlTask to start the automated 3-stage test
 };
 
 extern RobotState g_robotState;
